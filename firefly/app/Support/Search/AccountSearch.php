@@ -1,0 +1,142 @@
+<?php
+
+/**
+ * AccountSearch.php
+ * Copyright (c) 2020 james@firefly-iii.org
+ *
+ * This file is part of Firefly III (https://github.com/firefly-iii).
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+declare(strict_types=1);
+
+namespace FireflyIII\Support\Search;
+
+use FireflyIII\Models\UserGroup;
+use FireflyIII\User;
+use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+
+use function Safe\json_encode;
+
+/**
+ * Class AccountSearch
+ */
+class AccountSearch implements GenericSearchInterface
+{
+    public const string SEARCH_ALL    = 'all';
+
+    public const string SEARCH_IBAN   = 'iban';
+
+    public const string SEARCH_ID     = 'id';
+
+    public const string SEARCH_NAME   = 'name';
+
+    public const string SEARCH_NUMBER = 'number';
+
+    private string $field;
+    private string $query;
+    private array $types              = [];
+    private User $user;
+    private UserGroup $userGroup;
+
+    public function search(): Collection
+    {
+        $this->userGroup->toArray(); // used to stop phpstan.
+        $searchQuery   = $this->user->accounts()
+            ->leftJoin('account_types', 'accounts.account_type_id', '=', 'account_types.id')
+            ->leftJoin('account_meta', 'accounts.id', '=', 'account_meta.account_id')
+            ->whereIn('account_types.type', $this->types)
+        ;
+        $like          = sprintf('%%%s%%', $this->query);
+        $originalQuery = $this->query;
+
+        switch ($this->field) {
+            default:
+            case self::SEARCH_ALL:
+                $searchQuery->where(static function (Builder $q1) use ($like, $originalQuery): void {
+                    $q1->where(static function (Builder $q2) use ($like): void {
+                        $q2->whereLike('accounts.id', $like);
+                        $q2->orWhereLike('accounts.name', $like);
+                        $q2->orWhereLike('accounts.iban', $like);
+                    });
+                    // meta data:
+                    $q1->orWhere(static function (Builder $q3) use ($originalQuery): void {
+                        $json = json_encode($originalQuery, JSON_THROW_ON_ERROR);
+                        $q3->where('account_meta.name', '=', 'account_number');
+                        $q3->whereLike('account_meta.data', $json);
+                    });
+                });
+
+                break;
+
+            case self::SEARCH_ID:
+                $searchQuery->where('accounts.id', '=', (int) $originalQuery);
+
+                break;
+
+            case self::SEARCH_NAME:
+                $searchQuery->whereLike('accounts.name', $like);
+
+                break;
+
+            case self::SEARCH_IBAN:
+                $searchQuery->whereLike('accounts.iban', $like);
+
+                break;
+
+            case self::SEARCH_NUMBER:
+                // meta data:
+                $searchQuery->where(static function (Builder $q) use ($originalQuery): void {
+                    $json = json_encode($originalQuery, JSON_THROW_ON_ERROR);
+                    $q->where('account_meta.name', 'account_number');
+                    $q->where('account_meta.data', $json);
+                });
+
+                break;
+        }
+
+        return $searchQuery->distinct()->get(['accounts.*']);
+    }
+
+    public function setField(string $field): void
+    {
+        $this->field = $field;
+    }
+
+    public function setQuery(string $query): void
+    {
+        $this->query = $query;
+    }
+
+    public function setTypes(array $types): void
+    {
+        $this->types = $types;
+    }
+
+    public function setUser(Authenticatable|User|null $user): void
+    {
+        if ($user instanceof User) {
+            $this->user      = $user;
+            $this->userGroup = $user->userGroup;
+        }
+    }
+
+    public function setUserGroup(UserGroup $userGroup): void
+    {
+        $this->userGroup = $userGroup;
+    }
+}

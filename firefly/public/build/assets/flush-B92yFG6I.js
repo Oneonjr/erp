@@ -1,0 +1,1 @@
+import"./blank-bootstrap-Cr74M-yQ.js";window.onload=function(){localStorage.clear(),window.location=document.getElementsByTagName(`base`)[0].href};

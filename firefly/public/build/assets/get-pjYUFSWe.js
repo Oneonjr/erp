@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{list(t){return e.get(`/api/v1/piggy-banks`,{params:t})}};export{t};

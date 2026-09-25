@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{list(t){return e.get(`/api/v1/user-groups`,{params:t})}get(t,n){return e.get(`/api/v1/user-groups/`+parseInt(t),{params:n})}};export{t};

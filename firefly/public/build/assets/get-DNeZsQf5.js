@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{getByName(t){return e.get(`/api/v1/configuration/`+t)}};export{t};

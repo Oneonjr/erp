@@ -1,0 +1,198 @@
+<?php
+
+/**
+ * InstallController.php
+ * Copyright (c) 2019 james@firefly-iii.org
+ *
+ * This file is part of Firefly III (https://github.com/firefly-iii).
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+declare(strict_types=1);
+
+namespace FireflyIII\Http\Controllers\System;
+
+use Carbon\Carbon;
+use Exception;
+use FireflyIII\Exceptions\FireflyException;
+use FireflyIII\Http\Controllers\Controller;
+use FireflyIII\Support\Facades\AppConfiguration;
+use FireflyIII\Support\Http\Controllers\GetConfigurationData;
+use FireflyIII\Support\System\IsOldVersion;
+use Illuminate\Contracts\View\Factory;
+use Illuminate\Contracts\View\View;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Laravel\Passport\Passport;
+use phpseclib4\Crypt\RSA;
+
+use function Safe\file_put_contents;
+use function Safe\json_encode;
+
+/**
+ * Class InstallController
+ */
+final class InstallController extends Controller
+{
+    use GetConfigurationData;
+    use IsOldVersion;
+
+    public const string BASEDIR_ERROR   = 'Firefly III cannot execute the upgrade commands. It is not allowed to because of an open_basedir restriction.';
+    public const string FORBIDDEN_ERROR = 'Internal PHP function "proc_close" is disabled for your installation. Auto-migration is not possible.';
+    public const string OTHER_ERROR     = 'An error prevented Firefly III from executing the "<code>%s</code>"-command: ';
+
+    private string $lastError           = '';
+    // empty on purpose.
+    private array $upgradeCommands      = [
+        // there are 5 initial commands
+        // Check 4 places: InstallController, Docker image, UpgradeDatabase, composer.json
+        'firefly-iii:create-database'        => [],
+        'migrate'                            => ['--seed' => true, '--force' => true],
+        'generate-keys'                      => [],
+        'firefly-iii:upgrade-database'       => [],
+        'firefly-iii:set-latest-version'     => ['--james-is-cool' => true],
+        'firefly-iii:verify-security-alerts' => [],
+    ];
+
+    public function index(): Factory|RedirectResponse|View
+    {
+        Log::debug('Now in installer index.');
+        if ($this->hasNoTables() || $this->isOldVersionInstalled()) {
+            app('view')->share('FF_VERSION', config('firefly.version'));
+
+            return view('install.index');
+        }
+        Log::debug('Installer has finished, return to home.');
+
+        return response()->redirectToRoute('home');
+    }
+
+    public function runCommand(Request $request): JsonResponse
+    {
+        // return response()->json([], 403);
+        if ($this->hasNoTables() || $this->isOldVersionInstalled()) {
+            $requestIndex = (int) $request->input('index');
+            $requestIndex = clamp($requestIndex, 0, count($this->upgradeCommands) - 1);
+            $response     = ['hasNextCommand' => false, 'done' => true, 'previous' => null, 'error' => false, 'errorMessage' => null];
+
+            Log::debug(sprintf('Will now run commands. Request index is %d', $requestIndex));
+            $indexes      = array_keys($this->upgradeCommands);
+            if (array_key_exists($requestIndex, $indexes)) {
+                $command                    = $indexes[$requestIndex];
+                $parameters                 = $this->upgradeCommands[$command];
+                Log::debug(sprintf('Will now execute command "%s" with parameters', $command), $parameters);
+
+                try {
+                    $result = $this->executeCommand($command, $parameters);
+                } catch (FireflyException $e) {
+                    Log::error(sprintf('%s when trying %s', $e->getMessage(), $command));
+                    Log::error($e->getTraceAsString());
+                    if (str_contains($e->getMessage(), 'open_basedir restriction in effect')) {
+                        $this->lastError = self::BASEDIR_ERROR;
+                    }
+                    $result          = false;
+                    $this->lastError = sprintf('%s %s', sprintf(self::OTHER_ERROR, $command), $e->getMessage());
+                }
+                if (false === $result) {
+                    $response['errorMessage'] = $this->lastError;
+                    $response['error']        = true;
+
+                    return response()->json($response);
+                }
+                $response['hasNextCommand'] = array_key_exists($requestIndex + 1, $indexes);
+                $response['previous']       = $command;
+
+                if (false === $response['hasNextCommand']) {
+                    // if no next command, set the things
+                    try {
+                        AppConfiguration::set('ff3_version', (string) config('firefly.version'));
+                        AppConfiguration::set('ff3_build_time', (int) config('firefly.build_time'));
+                    } catch (FireflyException $e) {
+                        Log::warning($e->getMessage());
+                    }
+                }
+            }
+
+            return response()->json($response);
+        }
+
+        return response()->json([], 403);
+    }
+
+    /**
+     * @throws FireflyException
+     */
+    private function executeCommand(string $command, array $args): bool
+    {
+        $key = hash('sha256', sprintf('Installer - %s - %s', $command, json_encode($args)));
+        Log::debug(sprintf('Will now call command %s with args.', $command), $args);
+        if (Cache::has($key)) {
+            $time = Cache::get($key);
+            $diff = Carbon::now()->timestamp - $time;
+            if ($diff < 120) {
+                throw new FireflyException(sprintf(
+                    'This command was called recently, please wait two minutes before you try again (wait time is another %d sec).',
+                    120 - $diff
+                ));
+            }
+        }
+
+        try {
+            if ('generate-keys' === $command) {
+                $this->keys();
+            }
+            if ('firefly-iii:create-database' === $command && !$this->hasNoTables()) {
+                Log::debug('Database already exists, skipping create-database command.');
+                Cache::set($key, Carbon::now()->timestamp);
+
+                return true;
+            }
+            if ('generate-keys' !== $command) {
+                Artisan::call($command, $args);
+                Log::debug(Artisan::output());
+            }
+        } catch (Exception $e) { // intentional generic exception
+            Cache::clear();
+
+            throw new FireflyException($e->getMessage(), 0, $e);
+        }
+        Cache::set($key, Carbon::now()->timestamp);
+
+        return true;
+    }
+
+    /**
+     * Create specific RSA keys.
+     */
+    private function keys(): void
+    {
+        if ($this->hasNoTables() || $this->isOldVersionInstalled()) {
+            $key                      = RSA::createKey(4096);
+
+            [$publicKey, $privateKey] = [Passport::keyPath('oauth-public.key'), Passport::keyPath('oauth-private.key')];
+
+            if (file_exists($publicKey) || file_exists($privateKey)) {
+                return;
+            }
+
+            file_put_contents($publicKey, (string) $key->getPublicKey());
+            file_put_contents($privateKey, $key->toString('PKCS1'));
+        }
+    }
+}

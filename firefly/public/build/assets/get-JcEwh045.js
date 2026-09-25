@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{list(t){return e.get(`/api/v1/transactions`,{params:t})}show(t,n){return e.get(`/api/v1/transactions/`+parseInt(t),{params:n})}showJournal(t,n){return e.get(`/api/v1/transaction-journals/`+parseInt(t),{params:n})}transactionLinks(t,n){return e.get(`/api/v1/transaction-journals/`+parseInt(t)+`/links`,{params:n})}};export{t};

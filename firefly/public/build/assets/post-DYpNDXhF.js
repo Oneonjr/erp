@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{triggerTransaction(t,n){return e.post(`./api/v1/webhooks/`+t+`/trigger-transaction/`+n,{})}post(t){return e.post(`/api/v1/webhooks/`,t)}};export{t};

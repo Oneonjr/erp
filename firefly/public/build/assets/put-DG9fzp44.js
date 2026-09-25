@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{put(t,n){let r=`/api/v1/webhooks/`+parseInt(n.id);return e.put(r,t)}};export{t};

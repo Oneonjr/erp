@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{list(t){return e.get(`/api/v1/currencies`,{params:t})}get(t){return e.get(`/api/v1/currencies/`+t)}};export{t};

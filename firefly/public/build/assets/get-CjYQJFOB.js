@@ -1,0 +1,1 @@
+import{C as e}from"./all-4r6uNsCY.js";var t=class{get(t){return e.get(`/api/v1/accounts/${t}`)}list(t){return e.get(`/api/v1/accounts`,{params:t})}};export{t};
