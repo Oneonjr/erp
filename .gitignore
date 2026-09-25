@@ -1,0 +1,6 @@
+# Ignorar dados crus do banco de dados
+infra/mariadb_data/
+
+# Ignorar dependências pesadas
+**/vendor/
+**/node_modules/
